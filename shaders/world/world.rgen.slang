@@ -84,10 +84,10 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex, bool airVo
         // SER lifetime phase: keep paths that are not roulette-eligible, paths that may terminate via
         // roulette, and paths guaranteed to end at the bounce cap in separate coherence groups.
         uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
-        traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
+        traceRadianceReordered(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, WORLD_RAY_LIMIT,
                                showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint);
 #else
-        traceRadiance(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
+        traceRadiance(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, WORLD_RAY_LIMIT,
                       showCelestial, rayConeWidth, rayConeSpread);
 #endif
 
@@ -230,7 +230,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex, bool airVo
             float ndl = abs(signedNdl);
             if (ndl > 0.0) {
                 float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
-                float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
+                float3 vis = visibility(shadowOrigin, lightDir, WORLD_RAY_LIMIT).transmittance;
                 vis *= cloudSunTransmittance(worldPush, shadowOrigin, lightDir);
                 if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
                     L += throughput * albedo * INV_PI * worldPush.lightRadiance.xyz * ndl * vis;
@@ -307,7 +307,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex, bool airVo
         }
         float ndl = max(0.0, dot(n, lightDir));
         if (ndl > 0.0) {
-            VisibilityResult shadow = visibility(p, lightDir, 10000.0);
+            VisibilityResult shadow = visibility(p, lightDir, WORLD_RAY_LIMIT);
             float3 vis = shadow.transmittance * payloadParallaxShadow();
             vis *= cloudSunTransmittance(worldPush, p, lightDir);
             // Underwater receiver whose shadow ray crossed a water surface: scale the direct light by
@@ -352,7 +352,7 @@ public float3 tracePath(PathSegment seg, uint2 pix, uint sampleIndex, bool airVo
         if (sss > 0.0 && hitDepth <= MAX_SSS_INDIRECT_DEPTH) {
             float backNdl = max(0.0, dot(-n, lightDir));
             if (backNdl > 0.0) {
-                VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
+                VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, WORLD_RAY_LIMIT);
                 float3 visB = shadowBack.transmittance;
                 visB *= cloudSunTransmittance(worldPush, hitPos - n * SURF_BIAS, lightDir);
                 // Same caustic as the front-face NEE — underwater kelp/seagrass transmission should

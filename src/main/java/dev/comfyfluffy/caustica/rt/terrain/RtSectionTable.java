@@ -164,7 +164,8 @@ final class RtSectionTable {
         long offset = (long) geom.slot * SECTION_ENTRY_BYTES;
         long base = buffer.mapped + offset;
         MemoryUtil.memPutLong(base, geom.material.deviceAddress);
-        MemoryUtil.memPutLong(base + 8, geom.uvs.deviceAddress);
+        // Distant cutout records have flat materials and use this lane for 4×4×4 fine-section ownership.
+        MemoryUtil.memPutLong(base + 8, geom.key < 0 ? geom.fineMask : geom.uvs.deviceAddress);
         MemoryUtil.memPutInt(base + 16, geom.triBase[0]);
         MemoryUtil.memPutInt(base + 20, geom.triBase[1]);
         MemoryUtil.memPutInt(base + 24, geom.triBase[2]);
@@ -205,6 +206,7 @@ final class RtSectionTable {
         final int sz;
         /** Packed section-local RIS light records (possibly empty); flattened at publish. */
         final float[] lights;
+        long fineMask;
         int slot = -1;
         int instanceIndex = -1;
 

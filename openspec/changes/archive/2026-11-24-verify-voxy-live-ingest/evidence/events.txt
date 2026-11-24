@@ -1,0 +1,76 @@
+[baseline/p3.log]
+P4 3.666 CREATE
+[14:12:36] [Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved
+P4 7.236 READY (-1.5, -60.0, -4.5)
+P4 7.386 STATE x1032 loaded=false L0=- L2=- base=- gpu=none@-#0 x1064 loaded=false L0=- L2=Block{minecraft:air} base=- gpu=none@-#0
+P4 22.385 ARRIVE (1048.5, 3.0, 1039.5)
+P4 27.497 cmd fill 1026 -60 1030 1038 35 1042 minecraft:red_concrete
+P4 27.590 cmd fill 1058 -60 1030 1070 27 1042 minecraft:yellow_concrete
+P4 33.896 STATE x1032 loaded=true L0=Block{minecraft:red_concrete} L2=Block{minecraft:red_concrete} base=Block{minecraft:dirt} gpu=none@-#0 x1064 loaded=true L0=Block{minecraft:yellow_concrete} L2=Block{minecraft:yellow_concrete} base=Block{minecraft:dirt} gpu=none@-#0
+P4 34.295 UNLOAD 64 64
+P4 34.301 UNLOAD 66 64
+P4 40.203 ARRIVE (1048.5, 3.0, 1272.5)
+P4 54.313 STATE x1032 loaded=false L0=Block{minecraft:red_concrete} L2=Block{minecraft:red_concrete} base=Block{minecraft:dirt} gpu=macro@2#1230792727 x1064 loaded=false L0=Block{minecraft:yellow_concrete} L2=Block{minecraft:yellow_concrete} base=Block{minecraft:dirt} gpu=macro@2#1230792727
+P4 54.413 SHOT p3-first-014 eye=(1048.5, 4.619999885559082, 1272.5) yaw=180.0 pitch=0.0
+P4 82.477 SHOT p3-twin eye=(1048.5, 4.619999885559082, 1272.5) yaw=180.0 pitch=0.0
+P4 91.019 ARRIVE (1048.5, 3.0, 1039.5)
+P4 96.128 cmd fill 1058 -60 1030 1070 27 1042 minecraft:air
+P4 96.422 STATE x1032 loaded=true L0=Block{minecraft:red_concrete} L2=Block{minecraft:red_concrete} base=Block{minecraft:dirt} gpu=fine@1#527178302 x1064 loaded=true L0=Block{minecraft:air} L2=Block{minecraft:air} base=Block{minecraft:dirt} gpu=fine@1#527178302
+P4 101.822 UNLOAD 64 64
+P4 101.822 UNLOAD 66 64
+P4 106.929 STATE x1032 loaded=false L0=Block{minecraft:red_concrete} L2=Block{minecraft:red_concrete} base=Block{minecraft:dirt} gpu=macro@2#1637010447 x1064 loaded=false L0=Block{minecraft:air} L2=Block{minecraft:air} base=Block{minecraft:dirt} gpu=macro@2#1637010447
+P4 107.730 ARRIVE (1048.5, 3.0, 1272.5)
+P4 107.831 SHOT p3-after-000 eye=(1048.5, 4.619999885559082, 1272.5) yaw=180.0 pitch=0.0
+P4 151.861 SHOT p3-single eye=(1048.5, 4.619999885559082, 1272.5) yaw=180.0 pitch=0.0
+P4 151.961 STATE x1032 loaded=false L0=Block{minecraft:red_concrete} L2=Block{minecraft:red_concrete} base=Block{minecraft:dirt} gpu=macro@2#21522477 x1064 loaded=false L0=Block{minecraft:air} L2=Block{minecraft:air} base=Block{minecraft:dirt} gpu=macro@2#21522477
+P4 151.967 EXIT
+[14:15:03] [Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved
+
+[initial/inventory.log]
+P4 17.965 CREATE
+P4 21.612 DISK 1032 -62 1036 L0_page=false/total=0 L2_page=false/total=0
+P4 24.103 DISK 1032 12 1036 L0_page=false/total=12 L2_page=false/total=4
+P4 24.105 DISK 1064 12 1036 L0_page=false/total=12 L2_page=false/total=4
+P4 41.692 cmd fill 1026 -60 1030 1038 35 1042 minecraft:red_concrete
+P4 41.786 cmd fill 1058 -60 1030 1070 27 1042 minecraft:yellow_concrete
+P4 92.445 DISK 1032 12 1036 L0_page=true/total=600 L2_page=true/total=40
+P4 92.540 DISK 1064 12 1036 L0_page=true/total=600 L2_page=true/total=40
+P4 92.638 EXIT
+
+[baseline/restart.log]
+P4 19.308 READY (1048.5, 3.0, 1272.5)
+P4 19.763 DISK 1032 12 1036 L0_page=true/total=600 L2_page=true/total=40
+P4 23.002 DISK 1064 12 1036 L0_page=true/total=600 L2_page=true/total=40
+P4 24.961 STATE x1032 loaded=false L0=Block{minecraft:red_concrete} L2=Block{minecraft:red_concrete} base=Block{minecraft:dirt} gpu=macro@2#833970253 x1064 loaded=false L0=Block{minecraft:air} L2=Block{minecraft:air} base=Block{minecraft:dirt} gpu=macro@2#833970253
+P4 54.072 SHOT restart-restored eye=(1048.5, 4.619999885559082, 1272.5) yaw=-180.0 pitch=0.0
+P4 54.161 EXIT
+
+[disabled/off.log]
+P4 13.468 READY (1048.5, 3.0, 1272.5)
+P4 13.988 DISK 1032 12 1036 L0_page=true/total=600 L2_page=true/total=40
+P4 17.450 DISK 1320 -62 1288 L0_page=false/total=600 L2_page=false/total=40
+P4 45.574 SHOT off-saved eye=(1048.5, 4.619999885559082, 1272.5) yaw=-180.0 pitch=0.0
+P4 45.661 DISK 1320 -62 1288 L0_page=false/total=600 L2_page=false/total=40
+P4 45.669 CHECK 1320 -62 1288 loaded=false native=Block{minecraft:void_air} L0=- L2=- gpu=none@-#0
+P4 62.670 CHECK 1320 -62 1288 loaded=true native=Block{minecraft:dirt} L0=Block{minecraft:air} L2=Block{minecraft:air} gpu=none@-#0
+P4 62.677 DISK 1320 -62 1288 L0_page=false/total=600 L2_page=false/total=40
+P4 62.769 SHOT off-new-near eye=(1320.5, 4.619999885559082, 1288.5) yaw=180.0 pitch=0.0
+P4 84.583 DISK 1320 -62 1288 L0_page=false/total=600 L2_page=false/total=40
+P4 84.591 CHECK 1320 -62 1288 loaded=false native=Block{minecraft:void_air} L0=Block{minecraft:air} L2=Block{minecraft:air} gpu=none@-#0
+P4 84.682 SHOT off-returned eye=(1048.5, 4.619999885559082, 1272.5) yaw=180.0 pitch=0.0
+P4 89.783 SHOT off-new-far eye=(1048.5, 4.619999885559082, 1272.5) yaw=-86.6 pitch=13.0
+P4 89.882 EXIT
+
+[disabled/ground.log]
+P4 24.588 READY (1048.5, 3.0, 1272.5)
+P4 24.706 DISK 1320 -62 1288 L0_page=false/total=600 L2_page=false/total=40
+P4 45.224 CHECK 1320 -62 1288 loaded=true native=Block{minecraft:dirt} L0=Block{minecraft:air} L2=- gpu=none@-#0
+P4 45.233 SHOT ground-close eye=(1320.5, -52.38000011444092, 1288.5) yaw=-180.0 pitch=55.0
+P4 60.233 DISK 1320 -62 1288 L0_page=false/total=600 L2_page=false/total=40
+P4 60.240 CHECK 1320 -62 1288 loaded=false native=Block{minecraft:void_air} L0=Block{minecraft:air} L2=Block{minecraft:air} gpu=none@-#0
+P4 60.333 EXIT
+
+[coast-p3/client.log]
+P3 SURFACE -27504 62 36316 topY=64.0000 flags=20 rgb=707070 VoxyLodTile[lod=2, west=2, east=1, north=2, south=2, clipX=0, clipZ=0, radius=0]
+P3 SURFACE -27504 62 36316 topY=62.8889 flags=28 rgb=3f76e4 VoxyLodTile[lod=1, west=2, east=1, north=1, south=1, clipX=0, clipZ=0, radius=0]
+

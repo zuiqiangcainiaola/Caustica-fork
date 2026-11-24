@@ -405,6 +405,17 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // Water prims keep tint.w == 1, converted to the packed material enum below.
     uint pid = PrimitiveIndex() + sec.triBase[GeometryIndex()];
     TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[pid];
+    bool voxyWater = (pr.flags & TERRAIN_PRIM_VOXY_WATER) != 0u;
+    if ((pr.flags & TERRAIN_PRIM_VOXY) != 0u && !voxyWater) {
+        float3 n = pr.normal.xyz;
+        payload.normal = half3(dot(n, WorldRayDirection()) > 0.0 ? -n : n);
+        payload.albedo = half3(srgbToLinear(pr.tint.rgb));
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0);
+        payload.f0 = half3(0.04);
+        payloadSetPacked(payload, MATERIAL_OPAQUE, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, EMISSION_SOURCE_NONE);
+        return;
+    }
     MaterialHeader materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
     float3 n = normalize(pr.normal.xyz);
     float3 tint = pr.tint.rgb;
@@ -421,10 +432,15 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // directly-addressed load (no index buffer, no scattered vertex-UV gather), so it issues as soon as
     // pid is known and its latency overlaps the prim fetch instead of serialising behind an index load.
     // The index buffer still exists for the BLAS build; the shading path just no longer reads it.
-    ConstPtr<float2> uvs = ConstPtr<float2>(sec.uvAddr);
-    float2 uv0 = uvs[3u * pid + 0u];
-    float2 uv1 = uvs[3u * pid + 1u];
-    float2 uv2 = uvs[3u * pid + 2u];
+    float2 uv0 = 0.0, uv1 = 0.0, uv2 = 0.0;
+    // Voxy water uses the ordinary water header and biome tint, with no atlas coordinates.
+    // A coarse section stores its ownership mask in the UV address lane.
+    if (!voxyWater) {
+        ConstPtr<float2> uvs = ConstPtr<float2>(sec.uvAddr);
+        uv0 = uvs[3u * pid + 0u];
+        uv1 = uvs[3u * pid + 1u];
+        uv2 = uvs[3u * pid + 2u];
+    }
     float3 bary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
     float2 uv = bary.x * uv0 + bary.y * uv1 + bary.z * uv2;
     float3 tp0 = HitTriangleVertexPosition(0);

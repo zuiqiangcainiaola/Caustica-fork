@@ -51,7 +51,7 @@ public PathSegment tracePrimary(PathSegment seg,
         PathSegment terminal = makePathSegment(ro, rd, throughput, medium,
                                                rayConeWidth, rayConeSpread, seed, bounce,
                                                showCelestial);
-        traceRadiance(CULL_PRIMARY, ro, 0.0, rd, 10000.0,
+        traceRadiance(CULL_PRIMARY, ro, 0.0, rd, WORLD_RAY_LIMIT,
                       showCelestial, rayConeWidth, rayConeSpread);
 
         float segmentDistance = payload.hitT < 0.0 ? 10000.0 : max(payload.hitT, 0.0);

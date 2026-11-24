@@ -2,6 +2,8 @@
 // records and serializers from Slang reflection.
 module world_common;
 
+// Covers both sides of Voxy's largest supported 32768-block view for secondary rays.
+public static const float WORLD_RAY_LIMIT = 66000.0;
 // Read-only device pointer with explicit std430 layout. The layout parameter is LOAD-BEARING: a bare
 // Ptr<T> gets Slang's "natural" layout (no vec4 16-byte alignment → e.g. WorldPush.sunDir lands at 200
 // instead of the Java writer's 208, silently reading garbage) and additionally requires the
@@ -124,6 +126,9 @@ public struct LightGridSpan {
 // TerrainPrim.flags bit 0: this emissive quad is in the light buffer (RtLightCollector membership).
 public static const uint TERRAIN_PRIM_IN_LIGHT_BUFFER = 1u;
 public static const uint TERRAIN_PRIM_RAIN_BIOME = 2u;
+public static const uint TERRAIN_PRIM_VOXY = 4u;
+public static const uint TERRAIN_PRIM_VOXY_WATER = 8u;
+public static const uint TERRAIN_PRIM_VOXY_MASKED = 16u;
 
 // Largest finite half. The payload's half3 lanes carry HDR values (sky radiance most of all), so
 // producers clamp to this instead of letting the conversion round up to +inf.

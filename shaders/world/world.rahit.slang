@@ -48,6 +48,12 @@ float alphaDitherThreshold(uint salt) {
     return frac(base + float((pc.frameIndex + salt) & 255u) * 0.61803398875);
 }
 
+void transmitWaterShadow(inout Payload payload, float3 tint) {
+    payload.albedo *= half3(lerp(float3(1.0), tint, WATER_SHADOW_TINT));
+    payload.hitT = payload.hitT < 0.0 ? RayTCurrent() : min(payload.hitT, RayTCurrent());
+    IgnoreHit();
+}
+
 [shader("anyhit")]
 void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
     uint pid = PrimitiveIndex();
@@ -111,12 +117,8 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // the biome water color, then keep walking so submerged terrain is lit by colored transmission.
     if (bucket == BUCKET_WATER) {
         TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[tri];
-        payload.albedo *= half3(lerp(float3(1.0, 1.0, 1.0), pr.tint.rgb, WATER_SHADOW_TINT));
-        // Record the NEAREST water crossing (any-hit order is arbitrary) in the shadow payload's hitT
-        // lane. For an underwater shading point this is the exit point of its sun shadow ray, where
-        // world.rgen evaluates the wave-refraction caustic. visibility() seeds the -1 sentinel.
-        payload.hitT = payload.hitT < 0.0 ? RayTCurrent() : min(payload.hitT, RayTCurrent());
-        IgnoreHit();
+        transmitWaterShadow(payload, pr.tint.rgb);
+        return;
     }
 
     // Translucent radiance rays use a closest-hit-only SBT record; shadow rays tint and pass through here.
@@ -139,6 +141,21 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
         // white/clear-glass case it's meant to cover.
         payload.albedo *= half3(exp(-colorExtinction * materialHeader.average.a - TRANSLUCENT_NEUTRAL_EXTINCTION));
         IgnoreHit();
+    }
+
+    TerrainPrim cutout = ConstPtr<TerrainPrim>(sec.primAddr)[tri];
+    if ((cutout.flags & TERRAIN_PRIM_VOXY) != 0u) {
+        // Identify the occupied side of the face even when it lies exactly on a section plane.
+        if ((cutout.flags & TERRAIN_PRIM_VOXY_MASKED) != 0u) {
+            float3 hit = ObjectRayOrigin() + RayTCurrent() * ObjectRayDirection() - 0.01 * cutout.normal.xyz;
+            uint3 cell = uint3(clamp(floor(hit / 16.0), float3(0), float3(3)));
+            uint bit = cell.x + 4u * cell.z + 16u * cell.y;
+            if (((sec.uvAddr >> bit) & uint64_t(1)) != 0) IgnoreHit();
+        }
+        if ((cutout.flags & TERRAIN_PRIM_VOXY_WATER) != 0u
+                && (RayFlags() & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) != 0u)
+            transmitWaterShadow(payload, cutout.tint.rgb);
+        return;
     }
 
     // Cutout geometry: alpha from the atlas. PrimitiveIndex() restarts at 0 per geometry, so re-add this

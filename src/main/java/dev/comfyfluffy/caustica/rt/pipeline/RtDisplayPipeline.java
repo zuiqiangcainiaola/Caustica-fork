@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkComputePipelineCreateInfo;
@@ -15,22 +14,19 @@ import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
 import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
 import org.lwjgl.vulkan.VkPushConstantRange;
-import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.rt.RtShaderModules;
 
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
 
 /** Compute pass that maps the display-res HDR RT image into an LDR image compatible with the main target. */
 public final class RtDisplayPipeline {
-    private static final String SHADER_DIR = "/caustica/rt/";
     /**
      * HDR settings, depth-of-field controls, the current projection's depth terms and the temporal
      * accumulation state: the original 40 bytes of scalars plus the accumulation flags and the motion
@@ -71,7 +67,7 @@ public final class RtDisplayPipeline {
 
     public static RtDisplayPipeline create(RtContext ctx) {
         VkDevice vk = ctx.vk();
-        try (MemoryStack stack = MemoryStack.stackPush()) {
+        try (MemoryStack stack = MemoryStack.stackPush(); RtShaderModules modules = new RtShaderModules(vk)) {
             VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(8, stack);
             binds.get(0).binding(0).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                     .descriptorCount(1).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
@@ -120,7 +116,7 @@ public final class RtDisplayPipeline {
             long layout = p.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, "display pipeline layout");
 
-            long module = loadModule(vk, stack, "display.comp.spv");
+            long module = modules.load("display.comp.spv");
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, module, "display shader module");
             VkPipelineShaderStageCreateInfo stage = VkPipelineShaderStageCreateInfo.calloc(stack).sType$Default()
                     .stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT).module(module).pName(stack.UTF8("main"));
@@ -130,7 +126,6 @@ public final class RtDisplayPipeline {
             check(VK10.vkCreateComputePipelines(vk, VK10.VK_NULL_HANDLE, cpci, null, pPipeline),
                     "vkCreateComputePipelines(rt display)");
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, pPipeline.get(0), "display compute pipeline");
-            VK10.vkDestroyShaderModule(vk, module, null);
 
             return new RtDisplayPipeline(ctx, dsl, pool, set, layout, pPipeline.get(0));
         }
@@ -242,27 +237,5 @@ public final class RtDisplayPipeline {
         VK10.vkDestroyDescriptorPool(vk, descriptorPool, null);
         VK10.vkDestroyDescriptorSetLayout(vk, descriptorSetLayout, null);
         destroyed = true;
-    }
-
-    private static long loadModule(VkDevice vk, MemoryStack stack, String name) {
-        byte[] bytes;
-        try (InputStream in = RtDisplayPipeline.class.getResourceAsStream(SHADER_DIR + name)) {
-            if (in == null) {
-                throw new IllegalStateException("missing SPIR-V resource: " + SHADER_DIR + name);
-            }
-            bytes = in.readAllBytes();
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to read SPIR-V resource: " + SHADER_DIR + name, e);
-        }
-        ByteBuffer code = MemoryUtil.memAlloc(bytes.length).put(bytes);
-        code.flip();
-        try {
-            VkShaderModuleCreateInfo smci = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(code);
-            LongBuffer pModule = stack.mallocLong(1);
-            check(VK10.vkCreateShaderModule(vk, smci, null, pModule), "vkCreateShaderModule(" + name + ")");
-            return pModule.get(0);
-        } finally {
-            MemoryUtil.memFree(code);
-        }
     }
 }

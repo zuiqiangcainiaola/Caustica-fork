@@ -2,6 +2,7 @@
 	"required": true,
 	"minVersion": "0.8",
 	"package": "dev.comfyfluffy.caustica.mixin",
+	"plugin": "dev.comfyfluffy.caustica.mixin.CausticaMixinPlugin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
 		"BlockModelRenderStateMixin",

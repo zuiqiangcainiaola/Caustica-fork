@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.rt.overlay;
 
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.KHRAccelerationStructure;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkDescriptorImageInfo;
@@ -25,20 +24,17 @@ import org.lwjgl.vulkan.VkPipelineVertexInputStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo;
 import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
-import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 import org.lwjgl.vulkan.VkVertexInputAttributeDescription;
 import org.lwjgl.vulkan.VkVertexInputBindingDescription;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
+import dev.comfyfluffy.caustica.rt.RtShaderModules;
 
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
 
@@ -53,8 +49,6 @@ import static dev.comfyfluffy.caustica.rt.RtContext.check;
  * Blaze3D device bring-up) with one colour attachment, no depth, dynamic viewport/scissor.
  */
 public final class RtOverlayPipelines {
-    private static final String SHADER_DIR = "/caustica/rt/";
-
     private RtOverlayPipelines() {
     }
 
@@ -190,7 +184,7 @@ public final class RtOverlayPipelines {
 
     private static Pipeline createGraphics(RtContext ctx, Spec spec, String label) {
         VkDevice vk = ctx.vk();
-        try (MemoryStack stack = MemoryStack.stackPush()) {
+        try (MemoryStack stack = MemoryStack.stackPush(); RtShaderModules modules = new RtShaderModules(vk)) {
             LongBuffer p = stack.mallocLong(1);
 
             VkPipelineLayoutCreateInfo layoutCi = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default();
@@ -206,8 +200,8 @@ public final class RtOverlayPipelines {
             long layout = p.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, label + " pipeline layout");
 
-            long vertModule = loadModule(vk, stack, spec.vertSpv);
-            long fragModule = loadModule(vk, stack, spec.fragSpv);
+            long vertModule = modules.load(spec.vertSpv);
+            long fragModule = modules.load(spec.fragSpv);
             VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(2, stack);
             stages.get(0).sType$Default().stage(VK10.VK_SHADER_STAGE_VERTEX_BIT).module(vertModule).pName(stack.UTF8("main"));
             stages.get(1).sType$Default().stage(VK10.VK_SHADER_STAGE_FRAGMENT_BIT).module(fragModule).pName(stack.UTF8("main"));
@@ -293,8 +287,6 @@ public final class RtOverlayPipelines {
                     "vkCreateGraphicsPipelines(" + label + ")");
             long handle = pPipeline.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, handle, label + " pipeline");
-            VK10.vkDestroyShaderModule(vk, vertModule, null);
-            VK10.vkDestroyShaderModule(vk, fragModule, null);
             return new Pipeline(layout, handle);
         }
     }
@@ -642,28 +634,6 @@ public final class RtOverlayPipelines {
             long sampler = p.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, sampler, label + " sampler");
             return sampler;
-        }
-    }
-
-    static long loadModule(VkDevice vk, MemoryStack stack, String name) {
-        byte[] bytes;
-        try (InputStream in = RtOverlayPipelines.class.getResourceAsStream(SHADER_DIR + name)) {
-            if (in == null) {
-                throw new IllegalStateException("missing SPIR-V resource: " + SHADER_DIR + name);
-            }
-            bytes = in.readAllBytes();
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to read SPIR-V resource: " + SHADER_DIR + name, e);
-        }
-        ByteBuffer code = MemoryUtil.memAlloc(bytes.length).put(bytes);
-        code.flip();
-        try {
-            VkShaderModuleCreateInfo smci = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(code);
-            LongBuffer pModule = stack.mallocLong(1);
-            check(VK10.vkCreateShaderModule(vk, smci, null, pModule), "vkCreateShaderModule(" + name + ")");
-            return pModule.get(0);
-        } finally {
-            MemoryUtil.memFree(code);
         }
     }
 }

@@ -18,13 +18,10 @@ import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
 import org.lwjgl.vulkan.VkPushConstantRange;
 import org.lwjgl.vulkan.VkRayTracingPipelineCreateInfoKHR;
 import org.lwjgl.vulkan.VkRayTracingShaderGroupCreateInfoKHR;
-import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 import org.lwjgl.vulkan.VkStridedDeviceAddressRegionKHR;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
@@ -32,6 +29,7 @@ import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
+import dev.comfyfluffy.caustica.rt.RtShaderModules;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
 
@@ -61,7 +59,6 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkGetRayTracingShaderGroupH
  * supported by passing an array; {@code traceRayEXT}'s {@code missIndex} selects among them.
  */
 public final class RtPipeline {
-    private static final String SHADER_DIR = "/caustica/rt/";
     /** Set 1: entity albedo plus three independently indexed canonical material-page arrays. */
     private static final int BINDLESS_BINDINGS = 4;
     private static final int ENTITY_ALBEDO_BINDING = 0;
@@ -150,7 +147,7 @@ public final class RtPipeline {
                         + deviceLimit);
             }
         }
-        try (MemoryStack stack = MemoryStack.stackPush()) {
+        try (MemoryStack stack = MemoryStack.stackPush(); RtShaderModules modules = new RtShaderModules(vk)) {
             int firstExtraBinding = withBlockAlbedoAtlas ? 3 : 2;
             int materialBase = firstExtraBinding + extraStorageImages;
             // Sky rewrite: the vanilla celestials atlas (sun + moon phases), sampled by world.rmiss to
@@ -279,33 +276,25 @@ public final class RtPipeline {
             int chitStage = raygenCount + missCount;
             int ahitStage = chitStage + 1;
             int stageCount = raygenCount + missCount + 1 + (hasAhit ? 1 : 0);
-            long[] mGen = new long[raygenCount];
-            for (int g = 0; g < raygenCount; g++) {
-                mGen[g] = loadModule(vk, stack, rgen[g]);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mGen[g], label + " " + rgen[g]);
-            }
-            long[] mMiss = new long[missCount];
-            for (int m = 0; m < missCount; m++) {
-                mMiss[m] = loadModule(vk, stack, rmiss[m]);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mMiss[m], label + " " + rmiss[m]);
-            }
-            long mHit = loadModule(vk, stack, rchit);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHit, label + " " + rchit);
-            long mAhit = hasAhit ? loadModule(vk, stack, rahit) : 0L;
-            if (hasAhit) {
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mAhit, label + " " + rahit);
-            }
             ByteBuffer entry = stack.UTF8("main");
             VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(stageCount, stack);
             for (int g = 0; g < raygenCount; g++) {
-                stages.get(g).sType$Default().stage(VK_SHADER_STAGE_RAYGEN_BIT_KHR).module(mGen[g]).pName(entry);
+                long module = modules.load(rgen[g]);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, module, label + " " + rgen[g]);
+                stages.get(g).sType$Default().stage(VK_SHADER_STAGE_RAYGEN_BIT_KHR).module(module).pName(entry);
             }
             for (int m = 0; m < missCount; m++) {
-                stages.get(raygenCount + m).sType$Default().stage(VK_SHADER_STAGE_MISS_BIT_KHR).module(mMiss[m]).pName(entry);
+                long module = modules.load(rmiss[m]);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, module, label + " " + rmiss[m]);
+                stages.get(raygenCount + m).sType$Default().stage(VK_SHADER_STAGE_MISS_BIT_KHR).module(module).pName(entry);
             }
-            stages.get(chitStage).sType$Default().stage(VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR).module(mHit).pName(entry);
+            long closestHit = modules.load(rchit);
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, closestHit, label + " " + rchit);
+            stages.get(chitStage).sType$Default().stage(VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR).module(closestHit).pName(entry);
             if (hasAhit) {
-                stages.get(ahitStage).sType$Default().stage(VK_SHADER_STAGE_ANY_HIT_BIT_KHR).module(mAhit).pName(entry);
+                long anyHit = modules.load(rahit);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, anyHit, label + " " + rahit);
+                stages.get(ahitStage).sType$Default().stage(VK_SHADER_STAGE_ANY_HIT_BIT_KHR).module(anyHit).pName(entry);
             }
 
             VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(groupCount, stack);
@@ -336,17 +325,6 @@ public final class RtPipeline {
                     "vkCreateRayTracingPipelinesKHR");
             long pipeline = pPipeline.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, label);
-
-            for (int g = 0; g < raygenCount; g++) {
-                VK10.vkDestroyShaderModule(vk, mGen[g], null);
-            }
-            for (int m = 0; m < missCount; m++) {
-                VK10.vkDestroyShaderModule(vk, mMiss[m], null);
-            }
-            VK10.vkDestroyShaderModule(vk, mHit, null);
-            if (hasAhit) {
-                VK10.vkDestroyShaderModule(vk, mAhit, null);
-            }
 
             // SBT: one record per group. Over-align the stride so every region start is base-aligned and
             // every individual record satisfies shaderGroupHandleAlignment.
@@ -557,27 +535,5 @@ public final class RtPipeline {
 
     private static long align(long v, long a) {
         return (v + a - 1) & ~(a - 1);
-    }
-
-    private static long loadModule(VkDevice vk, MemoryStack stack, String name) {
-        byte[] bytes;
-        try (InputStream in = RtPipeline.class.getResourceAsStream(SHADER_DIR + name)) {
-            if (in == null) {
-                throw new IllegalStateException("missing SPIR-V resource: " + SHADER_DIR + name);
-            }
-            bytes = in.readAllBytes();
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to read SPIR-V resource: " + SHADER_DIR + name, e);
-        }
-        ByteBuffer code = MemoryUtil.memAlloc(bytes.length).put(bytes);
-        code.flip();
-        try {
-            VkShaderModuleCreateInfo smci = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(code);
-            LongBuffer pModule = stack.mallocLong(1);
-            check(VK10.vkCreateShaderModule(vk, smci, null, pModule), "vkCreateShaderModule(" + name + ")");
-            return pModule.get(0);
-        } finally {
-            MemoryUtil.memFree(code);
-        }
     }
 }

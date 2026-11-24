@@ -186,6 +186,14 @@ public final class RtTerrain {
     private boolean lightHierarchyDirty;
     private long lastLightHierarchyRequestNanos;
     private boolean windowValid;
+    private VoxyTerrain voxy;
+    private boolean reportedVoxyGeometry;
+    private final Long2ObjectOpenHashMap<VoxyLodTile> lodTiles = new Long2ObjectOpenHashMap<>();
+    private final Long2LongOpenHashMap fineCoverage = new Long2LongOpenHashMap();
+    private final LongOpenHashSet dirtyCoverage = new LongOpenHashSet();
+    private LongSet lastRecorded;
+    private int lodCenterX, lodCenterZ, lodRadius;
+    private final Long2LongOpenHashMap retryVoxyCoverage = new Long2LongOpenHashMap();
     private int windowPcx;
     private int windowPcz;
     private int windowRadius;
@@ -399,6 +407,11 @@ public final class RtTerrain {
         int pbz = mc.player.getBlockZ();
         int pcx = pbx >> 4, pcz = pbz >> 4, psy = pby >> 4;
         int r = horizontalChunks(mc);
+        VoxyTerrain next = VoxyTerrain.current(level, voxy);
+        if (voxy != next) {
+            if (windowValid) clear(ctx, false);
+            voxy = next;
+        }
         ClientChunkCache chunkSource = level.getChunkSource();
         int minSecY = level.getMinY() >> 4;
         int maxSecY = (level.getMinY() + level.getHeight() - 1) >> 4;
@@ -407,7 +420,12 @@ public final class RtTerrain {
 
         // Evicted geometry lands in `removed` and is consumed by the next streaming pass's build kick.
         try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.windowSync")) {
-            syncDesiredWindow(chunkSource, pcx, psy, pcz, r, loY, hiY, removed);
+            if (voxy == null) syncDesiredWindow(chunkSource, pcx, psy, pcz, r, loY, hiY, removed);
+            else {
+                int radius = voxy.radiusChunks();
+                syncLodTiles(pbx, pbz, radius, loY, hiY);
+                syncVoxyWindow(chunkSource, pcx, pcz, r, loY, hiY);
+            }
         }
 
         // Re-extract edited sections. Drain under a short lock so concurrent block updates are not lost.
@@ -458,7 +476,7 @@ public final class RtTerrain {
                 && completedBuilds.isEmpty()
                 && !lightGrid.hasCompletions()
                 && !lightHierarchyDirty
-                && removed.isEmpty() && prepared.isEmpty()) {
+                && removed.isEmpty() && prepared.isEmpty() && dirtyCoverage.isEmpty()) {
             return;
         }
         int pbx = mc.player.getBlockX();
@@ -473,7 +491,7 @@ public final class RtTerrain {
             drainCompletedBuilds(ctx, prepared, removed, completionResultsPerPass());
         }
 
-        if (!removed.isEmpty() || !prepared.isEmpty()) {
+        if (!removed.isEmpty() || !prepared.isEmpty() || !dirtyCoverage.isEmpty()) {
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.publish")) {
                 applyBuildChanges(ctx, prepared, removed, shouldRebase(pbx, pby, pbz), pbx, pby, pbz);
                 removed.clear();
@@ -509,6 +527,115 @@ public final class RtTerrain {
 
         flushLightHierarchyUpdate(ctx);
 
+    }
+
+    private void syncVoxyWindow(ClientChunkCache chunks, int cx, int cz, int near, int loY, int hiY) {
+        int radius = Math.max(near, Math.min(near + 4, lodRadius));
+        // A departing fine column continues to own its bits until its recorded tile is ready.
+        if (windowValid) {
+            for (var it = desiredColumns.iterator(); it.hasNext();) {
+                long column = it.nextLong();
+                int x = columnX(column), z = columnZ(column);
+                if (Math.abs(x - cx) <= radius && Math.abs(z - cz) <= radius) continue;
+                boolean waiting = false;
+                for (int y = loY; y <= hiY && !waiting; y++) {
+                    long tile = VoxyLodTile.key(x,y,z);
+                    waiting = resident.containsKey(sectionKey(x,y,z)) && lodTiles.containsKey(tile)
+                            && !resident.containsKey(tile) && !empty.contains(tile);
+                }
+                if (waiting) continue;
+                it.remove();
+                loadedColumns.remove(column);
+                removeDesiredColumnSections(x, z, loY, hiY, removed);
+            }
+        }
+        for (int x = cx - radius; x <= cx + radius; x++) {
+            for (int z = cz - radius; z <= cz + radius; z++) {
+                long column = columnKey(x, z);
+                boolean fine = Math.abs(x - cx) <= near && Math.abs(z - cz) <= near
+                        && chunks.hasChunk(x, z) && neighborChunksReady(chunks, x, z);
+                boolean changed = fine ? loadedColumns.add(column) : loadedColumns.remove(column);
+                if (!fine && !VoxyLodTile.withinRadius((x << 4) + 8, (z << 4) + 8,
+                        lodCenterX, lodCenterZ, lodRadius << 4)) {
+                    if (desiredColumns.remove(column)) removeDesiredColumnSections(x, z, loY, hiY, removed);
+                    continue;
+                }
+                if (desiredColumns.add(column)) {
+                    addDesiredColumnSections(x, z, loY, hiY);
+                } else if (changed) {
+                    // Cancel obsolete builds by token. The currently published BLAS owns this slot
+                    // until the replacement (including a known-empty near mesh) is ready.
+                    for (int y = loY; y <= hiY; y++) handleDirtySection(sectionKey(x, y, z), NO_DIRTY_GROUP);
+                }
+            }
+        }
+        windowValid = true;
+        windowPcx = cx;
+        windowPcz = cz;
+        windowRadius = radius;
+        long now = System.nanoTime();
+        for (var it = retryVoxyCoverage.long2LongEntrySet().fastIterator(); it.hasNext();) {
+            var entry = it.next();
+            long key = entry.getLongKey();
+            if (!desired.contains(key) || !usesVoxy(sectionX(key), sectionZ(key))) {
+                it.remove();
+            } else if (now - entry.getLongValue() >= 10_000_000_000L) {
+                it.remove();
+                handleDirtySection(key, NO_DIRTY_GROUP);
+            }
+        }
+    }
+
+    private void syncLodTiles(int bx, int bz, int radius, int loY, int hiY) {
+        LongSet recorded = voxy.recorded(bx >> 4,bz >> 4,radius,loY,hiY);
+        // Quantize only the horizon updates. Stable interior tiles retain their existing BLAS.
+        int cx = bx & ~3, cz = bz & ~3;
+        if (recorded == lastRecorded && cx == lodCenterX && cz == lodCenterZ && radius == lodRadius) return;
+        lastRecorded = recorded;
+        lodCenterX = cx;
+        lodCenterZ = cz;
+        lodRadius = radius;
+        for (var it = lodTiles.long2ObjectEntrySet().fastIterator(); it.hasNext();) {
+            long key = it.next().getLongKey();
+            if (recorded.contains(key) && tilePlan(key) != null) continue;
+            it.remove();
+            desired.remove(key);
+            clearQueuedWork(key,true);
+            invalidateInFlight(key);
+            empty.remove(key);
+            var old = resident.remove(key);
+            if (old != null) removed.add(old);
+        }
+        for (long key : recorded) {
+            VoxyLodTile plan = tilePlan(key);
+            if (plan == null) continue;
+            var previous = lodTiles.put(key,plan);
+            if (previous == null) {
+                desired.add(key);
+                enqueueMissingIfNeeded(key);
+            } else if (!plan.equals(previous)) {
+                handleDirtySection(key,NO_DIRTY_GROUP);
+            }
+        }
+    }
+
+    private VoxyLodTile tilePlan(long key) {
+        return VoxyLodTile.select(sectionX(key)<<4,sectionZ(key)<<4,lodCenterX,lodCenterZ,lodRadius<<4);
+    }
+
+    private void coverFine(long key, boolean covered) {
+        if (voxy == null || key < 0) return;
+        int x=sectionX(key), y=sectionY(key), z=sectionZ(key);
+        long tile=VoxyLodTile.key(x,y,z), bit=1L << VoxyLodTile.bit(x,y,z);
+        long old=fineCoverage.get(tile), next=covered ? old | bit : old & ~bit;
+        if (old == next) return;
+        if (next == 0) fineCoverage.remove(tile);
+        else fineCoverage.put(tile,next);
+        if (resident.containsKey(tile)) dirtyCoverage.add(tile);
+    }
+
+    private boolean usesVoxy(int sx, int sz) {
+        return voxy != null && !loadedColumns.contains(columnKey(sx, sz));
     }
 
     private void syncDesiredWindow(ClientChunkCache chunkSource, int pcx, int psy, int pcz,
@@ -634,6 +761,7 @@ public final class RtTerrain {
             // snapshot can't be trusted past this point.
             snapshots.invalidate(key);
             desired.remove(key);
+            coverFine(key,false);
             clearQueuedWork(key, true);
             invalidateInFlight(key);
             empty.remove(key);
@@ -941,7 +1069,7 @@ public final class RtTerrain {
             }
             int sx = sectionX(key);
             int sz = sectionZ(key);
-            if (!neighborChunksReady(chunkSource, sx, sz)) {
+            if (key >= 0 && !usesVoxy(sx, sz) && !neighborChunksReady(chunkSource, sx, sz)) {
                 continue; // stays queued; dispatched once the neighbours load
             }
             removeMissing(key);
@@ -1017,7 +1145,7 @@ public final class RtTerrain {
             }
             int sx = g.sx >> 4;
             int sz = g.sz >> 4;
-            if (!neighborChunksReady(chunkSource, sx, sz)) {
+            if (key >= 0 && !usesVoxy(sx, sz) && !neighborChunksReady(chunkSource, sx, sz)) {
                 i++;
                 continue;
             }
@@ -1070,7 +1198,9 @@ public final class RtTerrain {
     /** Snapshot one section and dispatch its complete worker → GPU build lifecycle. */
     private void dispatchSectionBuild(DispatchContext dispatch, long key, int sx, int sy, int sz) {
         RtFrameStats.FRAME.count("sectionsSnapshotted", 1);
-        RtSectionSnapshots.Region region = snapshots.createRegion(dispatch.level(), sx, sy, sz);
+        VoxyLodTile tile = lodTiles.get(key);
+        VoxyTerrain far = tile != null || usesVoxy(sx, sz) ? voxy : null;
+        RtSectionSnapshots.Region region = far == null ? snapshots.createRegion(dispatch.level(), sx, sy, sz) : null;
         long token = ++buildToken;
         long dirtyGroup = queuedDirtyGroup.remove(key);
         if (dirtyGroup != NO_DIRTY_GROUP && !dirtyGroups.containsKey(dirtyGroup)) {
@@ -1078,7 +1208,7 @@ public final class RtTerrain {
         }
         RtMaterialRegistry.Snapshot materialSnapshot = RtMaterialRegistry.INSTANCE.requireSnapshot();
         SectionTask task = new SectionTask(key, token, sx << 4, sy << 4, sz << 4, dirtyGroup,
-                terrainEpoch, materialSnapshot.epoch());
+                terrainEpoch, materialSnapshot.epoch(), far != null);
         beginActiveTask();
         try {
             RtWorkerPool.INSTANCE.submit(() -> {
@@ -1087,12 +1217,19 @@ public final class RtTerrain {
                         completeTask(task, null, null, null);
                         return;
                     }
-                    WorkerTessState ws = WORKER_TESS.get(); // thread-confined; reset per task, arrays amortized
-                    ws.reset(dispatch.blockColors(), dispatch.blockSpriteFinder());
-                    FluidRenderer fluidRenderer = new FluidRenderer(dispatch.fluidModelSet());
-                    CpuSection cpu = buildCpuSection(region, dispatch.modelSet(), ws.blockEmitter, ws.blockRandom,
-                            ws.capture,
-                            fluidRenderer, ws.fluidCapture, ws.mesh, ws.pos, materialSnapshot, sx, sy, sz);
+                    CpuSection cpu;
+                    if (far != null) {
+                        int waterMaterial = materialSnapshot.waterId();
+                        cpu = tile == null ? far.mesh(sx, sy, sz, waterMaterial)
+                                : far.meshTile(sx, sy, sz, tile, waterMaterial);
+                        task.missingVoxyData = cpu == VoxyTerrain.MISSING;
+                    } else {
+                        WorkerTessState ws = WORKER_TESS.get();
+                        ws.reset(dispatch.blockColors(), dispatch.blockSpriteFinder());
+                        FluidRenderer fluidRenderer = new FluidRenderer(dispatch.fluidModelSet());
+                        cpu = buildCpuSection(region, dispatch.modelSet(), ws.blockEmitter, ws.blockRandom,
+                                ws.capture, fluidRenderer, ws.fluidCapture, ws.mesh, ws.pos, materialSnapshot, sx, sy, sz);
+                    }
                     if (!isTaskCurrent(task)) {
                         completeTask(task, null, null, null);
                         return;
@@ -1296,9 +1433,22 @@ public final class RtTerrain {
                         result.failure());
             }
             PreparedSection built = result.prepared();
+            if (task.missingVoxyData && resident.containsKey(task.key)) {
+                // Ingestion can lag a departing vanilla chunk. Keep its last good coverage and
+                // retry the database after the snapshot expires, without replacing it with air.
+                retryVoxyCoverage.put(task.key, System.nanoTime());
+                DirtyGroup group = dirtyGroups.get(dirtyGroup);
+                if (group != null) completeDirtyGroupMember(group, prepared, removed);
+                remaining--;
+                continue;
+            }
             if (built != null) {
                 try {
                     ctx.gpuExecutor().markPublished(result.build());
+                    if (task.voxy && !reportedVoxyGeometry) {
+                        reportedVoxyGeometry = true;
+                        CausticaMod.LOGGER.info("Voxy terrain BLAS ready at block {}, {}, {}", task.sox, task.soy, task.soz);
+                    }
                     RtFrameStats.FRAME.count("terrainBuildsCompleted", 1);
                 } catch (Throwable t) {
                     RtSectionBuilder.destroy(built);
@@ -1334,6 +1484,7 @@ public final class RtTerrain {
                         removed.add(prev);
                     }
                     empty.add(task.key);
+                    coverFine(task.key,!task.missingVoxyData);
                     remaining--;
                 } else {
                     empty.remove(task.key);
@@ -1359,7 +1510,9 @@ public final class RtTerrain {
         prepared.addAll(group.prepared);
         removed.addAll(group.removed);
         for (LongIterator it = group.emptyKeys.iterator(); it.hasNext(); ) {
-            empty.add(it.nextLong());
+            long key = it.nextLong();
+            empty.add(key);
+            coverFine(key,true);
         }
     }
 
@@ -1446,8 +1599,10 @@ public final class RtTerrain {
         final long dirtyGroup;
         final long terrainEpoch;
         final long materialEpoch;
+        final boolean voxy;
+        boolean missingVoxyData;
         SectionTask(long key, long token, int sox, int soy, int soz, long dirtyGroup,
-                    long terrainEpoch, long materialEpoch) {
+                    long terrainEpoch, long materialEpoch, boolean voxy) {
             this.key = key;
             this.token = token;
             this.sox = sox;
@@ -1456,6 +1611,7 @@ public final class RtTerrain {
             this.dirtyGroup = dirtyGroup;
             this.terrainEpoch = terrainEpoch;
             this.materialEpoch = materialEpoch;
+            this.voxy = voxy;
         }
     }
 
@@ -1493,7 +1649,7 @@ public final class RtTerrain {
         retire(ctx, lastGraphicsUse, removed);
 
 
-        if (!prepared.isEmpty()) {
+        if (!prepared.isEmpty() || !dirtyCoverage.isEmpty()) {
             Generation oldGeneration = table.beginWriteGeneration(ctx, table.liveSlotCapacity(prepared, resident));
             if (oldGeneration != null) {
                 retireGeneration(ctx, lastGraphicsUse, oldGeneration);
@@ -1510,6 +1666,8 @@ public final class RtTerrain {
                 ctx.gpuExecutor().retireUnpublished(g::destroy);
                 continue;
             }
+            coverFine(ps.key(),true);
+            if (ps.key() < 0) g.fineMask = fineCoverage.get(ps.key());
             SectionGeom prev = resident.get(ps.key());
             boolean sectionLightsChanged = !sameLightRecords(prev != null ? prev.lights : null, g.lights);
             lightsChanged |= sectionLightsChanged;
@@ -1532,6 +1690,14 @@ public final class RtTerrain {
             if (sectionLightsChanged || prev == null) updateLightSection(g);
             published.add(ps.key());
         }
+        for (long key : dirtyCoverage) {
+            var g = resident.get(key);
+            if (g != null) {
+                g.fineMask = fineCoverage.get(key);
+                table.write(g);
+            }
+        }
+        dirtyCoverage.clear();
         table.flushWrites();
 
         if (resident.isEmpty()) {
@@ -1669,6 +1835,13 @@ public final class RtTerrain {
 
     /** Full teardown (world exit / shutdown): drain the GPU, then free everything incl. an in-flight build. */
     private void clear(RtContext ctx, boolean shutdown) {
+        voxy = null;
+        lastRecorded = null;
+        lodTiles.clear();
+        fineCoverage.clear();
+        dirtyCoverage.clear();
+        reportedVoxyGeometry = false;
+        retryVoxyCoverage.clear();
         if (!shutdown) {
             clearAsync(ctx);
             return;
@@ -1704,7 +1877,7 @@ public final class RtTerrain {
         lightSections.clear();
         lightHierarchyDirty = false;
         lastLightHierarchyRequestNanos = 0L;
-        if (resident.isEmpty() && table.buffer == null && removed.isEmpty() && prepared.isEmpty()) {
+        if (resident.isEmpty() && table.buffer == null && removed.isEmpty() && prepared.isEmpty() && dirtyCoverage.isEmpty()) {
             empty.clear();
             table.instances = null;
             published.clear();
@@ -1871,9 +2044,9 @@ public final class RtTerrain {
         return (int) key;
     }
 
-    /** Pack section coords into a stable map key; ranges fit comfortably in the masks. */
+    /** The low 11 Y bits cover Minecraft's build limits. The high bit identifies a Voxy 64³ tile. */
     static long sectionKey(int scx, int scy, int scz) {
-        return (scx & 0x3FFFFFFL) | ((scz & 0x3FFFFFFL) << 26) | ((scy & 0xFFFL) << 52);
+        return (scx & 0x3FFFFFFL) | ((scz & 0x3FFFFFFL) << 26) | ((scy & 0x7FFL) << 52);
     }
 
     private static int sectionX(long key) {
@@ -1885,7 +2058,7 @@ public final class RtTerrain {
     }
 
     private static int sectionY(long key) {
-        return (int) (key >> 52);
+        return (int) (key << 1 >> 53);
     }
 
 }

@@ -24,11 +24,14 @@ final class RtDescriptorRebindContractTest {
         assertInOrder(menuPresent, "ctx.waitIdle();", "sdrPresentPipeline.invalidateBindings();",
                 "sdrPresentImage.destroy();", "sdrPresentPipeline.setImages(");
 
-        for (String source : new String[] {"RtDisplayPipeline.java", "RtHdrCompositePipeline.java",
-                "RtSdrPresentPipeline.java", "RtExposurePipeline.java"}) {
+        for (String source : new String[] {"RtDisplayPipeline.java", "RtExposurePipeline.java", "RtPresentPass.java"}) {
             String pipeline = Files.readString(JAVA.resolve("pipeline").resolve(source));
-            assertTrue(method(pipeline, "public void invalidateBindings(").contains("bindingsDirty = true;"),
+            assertTrue(method(pipeline, "void invalidateBindings(").contains("bindingsDirty = true;"),
                     source + " must forget descriptor bindings even if numeric handles are reused");
+        }
+        for (String source : new String[] {"RtHdrCompositePipeline.java", "RtSdrPresentPipeline.java"}) {
+            String pipeline = Files.readString(JAVA.resolve("pipeline").resolve(source));
+            assertTrue(method(pipeline, "public void invalidateBindings(").contains("pass.invalidateBindings();"), source);
         }
         String exposure = Files.readString(JAVA.resolve("pipeline").resolve("RtExposure.java"));
         assertTrue(method(exposure, "public void invalidateBindings(")
